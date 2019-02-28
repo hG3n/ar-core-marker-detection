@@ -11,7 +11,7 @@ LOCAL_ARM_MODE  := arm
 LOCAL_PATH      := $(NDK_PROJECT_PATH)
 LOCAL_MODULE    := libnative
 LOCAL_CFLAGS    := -Werror -Wall
-LOCAL_SRC_FILES := MarkerDetection.cpp ar-marker-detection/
+LOCAL_SRC_FILES := MarkerDetection.cpp marker_detector.cpp marker.cpp
 LOCAL_LDLIBS    := -llog -lGLESv2
 
 include $(BUILD_SHARED_LIBRARY)

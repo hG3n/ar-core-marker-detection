@@ -10,11 +10,14 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "marker.h"
-
 class MarkerDetector {
 
 public:
+
+    enum MarkerOrientation
+    {
+        UP, DOWN, LEFT, RIGHT
+    };
 
     /**
      * c'tor
@@ -31,7 +34,7 @@ public:
      * @param binarized_image
      * @param active_markers
      */
-    void findMarkers(const cv::Mat &binarized_image, std::vector <Marker> *active_markers);
+    void findMarkers(const cv::Mat &binarized_image, std::vector<float> *active_markers, cv::Mat *original_image);
 
 
 private:

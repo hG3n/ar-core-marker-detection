@@ -6,13 +6,16 @@
 #include <sstream>
 #include <GLES3/gl3.h>
 
+#include "native_debug.h"
+
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "native_debug.h"
+#include "marker_detector.h"
 
 typedef void (*UnityRenderingEvent)(int eventId);
 
+// GL Stuff
 static float g_Time;
 
 static void *g_TextureHandle = NULL;
@@ -20,11 +23,28 @@ static int g_TextureWidth = 0;
 static int g_TextureHeight = 0;
 
 cv::Mat current_image(480, 640, CV_8UC4);
-//cv::Mat current_image(480, 640, CV_8UC1);
-//cv::Mat grey(480, 640, CV_8UC1);
 
-// callbacks
+// binarize image settings
+static int BINARIZE_MAX = 255;
+static int BINARIZE_THRESHOLD = 100;
+
+// Marker detection
+MarkerDetector MARKER_DETECTOR(81, 9, false);
+std::vector<float> CURRENT_MARKERS;
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+/// --- callbacks
 void convertImageToCvMat(int width, int height, int y_row_stride, unsigned char *image_data, cv::Mat *image_matrix);
+
+static void OnRenderEvent(int eventID);
+/// ---
 
 
 /**
@@ -49,15 +69,21 @@ extern "C" void SetTextureFromUnity(void *textureHandle, int w, int h) {
 
 /**
  *
- * @param eventID
  */
-static void OnRenderEvent(int eventID) {
-    GLuint gltex = (GLuint)(size_t)(g_TextureHandle);
+extern "C" void GetFoundMarkers(int *length, int *marker_stride, float **data) {
+    // determine current array length
+    *length = CURRENT_MARKERS.size();
 
-    // Update texture data, and free the memory buffer
-    glBindTexture(GL_TEXTURE_2D, gltex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, current_image.data);
+    // define marker stride
+    *marker_stride = 10;
+
+    // copy data to output array
+    auto size = (*length) * sizeof(float);
+    *data = static_cast<float *>(malloc(size));
+    memcpy(*data, CURRENT_MARKERS.data(), size);
 }
+
+
 
 /**
  * GetRenderEventFunc, an example function we export which is used to get a rendering event callback function.
@@ -68,11 +94,41 @@ extern "C" UnityRenderingEvent GetRenderEventFunc() {
 
 
 /**
- *
+ * Finds Markers in an image captured by AR Core
+ * @param width
+ * @param height
+ * @param y_row_stride
+ * @param uv_row_stride
+ * @param uv_pixel_stride
+ * @param image_data
+ * @param buffer_size
  */
-extern "C" void findMarkersInImage(int width, int height, int y_row_stride, int uv_row_stride, int uv_pixel_stride,
-                                   unsigned char *image_data, int buffer_size) {
+extern "C" void findMarkersInImage(int width, int height, int y_row_stride, unsigned char *image_data) {
     convertImageToCvMat(width, height, y_row_stride, image_data, &current_image);
+
+    /// make greyscale
+    cv::Mat grey(height, width, CV_8UC1);
+    cv::cvtColor(current_image, grey, cv::COLOR_RGB2GRAY);
+
+    /// binarize image
+    cv::Mat binarized(height, width, CV_8UC1);
+    cv::threshold(grey, binarized, BINARIZE_THRESHOLD, BINARIZE_MAX, cv::THRESH_BINARY);
+
+    /// clear last frame marker & find new ones
+    CURRENT_MARKERS.clear();
+    MARKER_DETECTOR.findMarkers(binarized, &CURRENT_MARKERS, &current_image);
+}
+
+/**
+ *
+ * @param eventID
+ */
+static void OnRenderEvent(int eventID) {
+    GLuint gltex = (GLuint)(size_t)(g_TextureHandle);
+
+    // Update texture data, and free the memory buffer
+    glBindTexture(GL_TEXTURE_2D, gltex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, current_image.data);
 }
 
 /**
@@ -95,7 +151,6 @@ void convertImageToCvMat(int width, int height, int y_row_stride, unsigned char 
         p_out = image_matrix->ptr<uchar>(r);
         for (int c = 0; c < image_matrix->cols * channels; c++) {
             unsigned int idx = (r * y_row_stride) + (c / channels);
-//            unsigned int idx = r * y_row_stride + c;
             p_out[c] = static_cast<uchar>(image_data[idx]);
             p_out[c + 1] = static_cast<uchar>(image_data[idx]);
             p_out[c + 2] = static_cast<uchar>(image_data[idx]);

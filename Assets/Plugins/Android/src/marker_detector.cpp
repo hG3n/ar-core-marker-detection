@@ -1,11 +1,10 @@
-
-// Created by Hagen Hiller on 2019-02-07.
-//
-
 #include "marker_detector.h"
 
 #include <iostream>
+#include <sstream>
 #include <opencv2/imgproc.hpp>
+
+#include "native_debug.h"
 
 MarkerDetector::MarkerDetector() {}
 
@@ -20,16 +19,28 @@ MarkerDetector::MarkerDetector(int pattern_size, int pattern_segments, bool verb
      * 3 -- 2
      */
     transform_matrix_.push_back(cv::Point2f(0, 0));
-    transform_matrix_.push_back(cv::Point2f(0, pattern_size));
-    transform_matrix_.push_back(cv::Point2f(pattern_size, pattern_size));
     transform_matrix_.push_back(cv::Point2f(pattern_size, 0));
+    transform_matrix_.push_back(cv::Point2f(pattern_size, pattern_size));
+    transform_matrix_.push_back(cv::Point2f(0, pattern_size));
 }
 
 
-void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector <Marker> *active_markers) {
+void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector<float> *active_markers,
+                                 cv::Mat *original_image) {
     // find shapes
     std::vector <std::vector<cv::Point2f>> shapes;
+
     findShapeCorners(binarized_image, shapes);
+
+    cv::Scalar r(255, 0, 0);
+    cv::Scalar g(0, 255, 0);
+    cv::Scalar b(0, 0, 255);
+    cv::Scalar y(255, 255, 0);
+    std::vector <cv::Scalar> colors;
+    colors.push_back(r);
+    colors.push_back(g);
+    colors.push_back(b);
+    colors.push_back(y);
 
     for (size_t poly_idx = 0; poly_idx < shapes.size(); ++poly_idx) {
 
@@ -37,25 +48,13 @@ void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector <Ma
         std::vector <cv::Point2f> corner_points = shapes[poly_idx];
         auto corner_points_sorted = sortVertices(corner_points);
 
+        for (size_t i = 0; i < corner_points_sorted.size(); ++i) {
+            cv::circle(*original_image, corner_points_sorted[i], 5, colors[i], CV_FILLED);
+        }
+
         // warp shape
         cv::Mat warped_shape(cv::Size(pattern_size, pattern_size), CV_32FC1);
-
-//        cv::Mat cpy = binarized_image.clone();
-//        cv::cvtColor(cpy, cpy, CV_GRAY2BGR);
-//        std::vector<cv::Scalar> corner_colors;
-
-        // B , G , R
-//        corner_colors.push_back({255, 0, 255});
-//        corner_colors.push_back({255, 0, 0});
-//        corner_colors.push_back({0, 255, 0});
-//        corner_colors.push_back({127, 127, 127});
-//        for (auto e: corner_points_sorted)
-//            for (size_t i = 0; i < corner_points_sorted.size(); ++i)
-//                cv::circle(cpy, corner_points_sorted[i], 2, corner_colors[i], CV_FILLED);
-
-//        Misc::showImage(cpy);
         cv::Mat p_transform = cv::getPerspectiveTransform(corner_points_sorted, transform_matrix_);
-
         cv::warpPerspective(binarized_image, warped_shape, p_transform, cv::Size(pattern_size, pattern_size));
 
         // generate marker map
@@ -65,13 +64,24 @@ void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector <Ma
         // validate whether the detected shape is a trackable marker
         int marker_id = validateMarker(marker_map);
         if (marker_id > -1) {
-            auto m = Marker(marker_id, corner_points, marker_map);
-            active_markers->push_back(m);
+//            LOGI("Found marker with id: %s", ss.str().c_str());
+            active_markers->push_back(marker_id);
+            active_markers->push_back(-10);
+            active_markers->push_back(corner_points_sorted[0].x);
+            active_markers->push_back(corner_points_sorted[0].y);
+
+            active_markers->push_back(corner_points_sorted[1].x);
+            active_markers->push_back(corner_points_sorted[1].y);
+
+            active_markers->push_back(corner_points_sorted[2].x);
+            active_markers->push_back(corner_points_sorted[2].y);
+
+            active_markers->push_back(corner_points_sorted[3].x);
+            active_markers->push_back(corner_points_sorted[3].y);
         } else {
             std::cout << "" << std::endl;
         }
     }
-
 }
 
 
@@ -128,9 +138,10 @@ int MarkerDetector::validateMarker(const cv::Mat &marker_map) {
     auto rightmost_col_sum = cv::sum(marker_map.col(marker_map.cols - 1))[0];
 
     if (upper_row_sum != 0 || lower_row_sum != 0 || leftmost_col_sum != 0 || rightmost_col_sum != 0) {
-        std::cout << "(!) The detected shape does not seem to be a marker." << std::endl;
-        std::cout << "  (i) No outer ring was be detected." << std::endl;
-        std::cout << std::endl;
+        if (verbose_) {
+            LOGE("%s", "(!) The detected shape does not seem to be a marker.");
+            LOGE("%s", "  (i) No outer ring was be detected.");
+        }
         return -1;
     }
 
@@ -142,60 +153,76 @@ int MarkerDetector::validateMarker(const cv::Mat &marker_map) {
     positional_dots.emplace_back(cv::Point2i(1, 7));
 
     int direction_idx = -1;
-    for (size_t i = 0; i < positional_dots.size(); ++i)
-        if (static_cast<int>(marker_map.at<uchar>(positional_dots[i])) == 0)
+    int num_whites = 0;
+    int num_blacks = 0;
+    /// check for the amount of white and black points
+    /// if white < 3 return
+    /// elif blacks > 1 return
+    for (size_t i = 0; i < positional_dots.size(); ++i) {
+        if (static_cast<int>(marker_map.at<uchar>(positional_dots[i])) == 0) {
             direction_idx = static_cast<int>(i);
+            ++num_blacks;
+        } else {
+            ++num_whites;
+        }
+    }
 
-    Marker::Orientation orientation;
+    if (num_whites < 3)
+        return -1;
+
+    if (num_blacks > 1)
+        return -1;
+
+    MarkerOrientation orientation;
     if (direction_idx == -1) {
-        std::cout << "(!) The detected shape does not seem to be a marker." << std::endl;
-        std::cout << "  (i) Error detecting positional dots." << std::endl;
-        std::cout << std::endl;
+        if (verbose_) {
+            LOGE("%s", "(!) The detected shape does not seem to be a marker.");
+            LOGE("%s", "  (i) Error detecting positional dots.");
+        }
         return -1;
     } else {
         for (const auto &e: positional_dots) {
             if (e == cv::Point2i(1, 1))
-                orientation = Marker::RIGHT;
+                orientation = RIGHT;
             else if (e == cv::Point2i(7, 1))
-                orientation = Marker::DOWN;
+                orientation = DOWN;
             else if (e == cv::Point2i(7, 7))
-                orientation = Marker::LEFT;
+                orientation = LEFT;
             else if (e == cv::Point2i(1, 7))
-                orientation = Marker::UP;
+                orientation = UP;
         }
     }
-
-
-    /// marker center indicator
-    // might not be necessary at all, lets just leave it for the moment
 
     /// marker code
     // ToDo: check against left and right rotations
     const uchar *raw_code; // = marker_map.colRange(2, 7).ptr<uchar>(6);
     std::vector <uchar> code; //(code_row, code_row + (marker_map.cols - 4));
     switch (orientation) {
-        case Marker::UP: {
+        case UP: {
             raw_code = marker_map.colRange(2, 7).ptr<uchar>(6);
             code = std::vector<uchar>(raw_code, raw_code + (marker_map.cols - 4));
             break;
         }
-        case Marker::DOWN: {
+        case DOWN: {
             raw_code = marker_map.colRange(2, 7).ptr<uchar>(2);
             code = std::vector<uchar>(raw_code, raw_code + (marker_map.cols - 4));
             break;
         }
-        case Marker::LEFT: {
+        case LEFT: {
             raw_code = marker_map.rowRange(2, 7).ptr<uchar>(2);
             code = std::vector<uchar>(raw_code, raw_code + (marker_map.cols - 4));
             break;
         }
-        case Marker::RIGHT: {
+        case RIGHT: {
             raw_code = marker_map.rowRange(2, 7).ptr<uchar>(6);
             code = std::vector<uchar>(raw_code, raw_code + (marker_map.cols - 4));
             break;
         }
         default: {
-            std::cout << "(!) Error detecting orientation." << std::endl;
+            if (verbose_) {
+                LOGE("%s", "(!) The detected shape does not seem to be a marker.");
+                LOGE("%s", "  (!) Error detecting orientation.");
+            }
             return -1;
         }
 
@@ -210,9 +237,10 @@ int MarkerDetector::validateMarker(const cv::Mat &marker_map) {
         marker_id += val;
     }
     int final_marker_id = static_cast<int>(pow(2, code.size())) - marker_id - 1;
-    if(verbose_) {
-        std::cout << "Marker id: " << final_marker_id << std::endl;
-        std::cout << std::endl;
+    if (verbose_) {
+        std::stringstream ss;
+        ss << final_marker_id;
+        LOGI(" Found marker with id: %s", ss.str().c_str());
     }
 
     return final_marker_id;

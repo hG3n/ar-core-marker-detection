@@ -38,11 +38,6 @@ using Input = GoogleARCore.InstantPreviewInput;
         public Camera FirstPersonCamera;
 
         /// <summary>
-        /// A game object parenting UI for displaying the "searching for planes" snackbar.
-        /// </summary>
-        public GameObject SearchingForPlaneUI;
-
-        /// <summary>
         /// A list to hold all planes ARCore is tracking in the current frame. This object is used across
         /// the application to avoid per-frame allocations.
         /// </summary>
@@ -71,8 +66,6 @@ using Input = GoogleARCore.InstantPreviewInput;
                     break;
                 }
             }
-
-            SearchingForPlaneUI.SetActive(showSearchingUI);
 
             _HandleTouchEvent();
         }

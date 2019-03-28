@@ -32,14 +32,6 @@ static int BINARIZE_THRESHOLD = 100;
 MarkerDetector MARKER_DETECTOR(81, 9, false);
 std::vector<float> CURRENT_MARKERS;
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-
 /// --- callbacks
 void convertImageToCvMat(int width, int height, int y_row_stride, unsigned char *image_data, cv::Mat *image_matrix);
 

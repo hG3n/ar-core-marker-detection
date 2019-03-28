@@ -5,6 +5,8 @@
 #include <opencv2/imgproc.hpp>
 
 #include "native_debug.h"
+#include "cv_util.h"
+
 
 MarkerDetector::MarkerDetector() {}
 
@@ -32,15 +34,11 @@ void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector<flo
 
     findShapeCorners(binarized_image, shapes);
 
-    cv::Scalar r(255, 0, 0);
-    cv::Scalar g(0, 255, 0);
-    cv::Scalar b(0, 0, 255);
-    cv::Scalar y(255, 255, 0);
     std::vector <cv::Scalar> colors;
-    colors.push_back(r);
-    colors.push_back(g);
-    colors.push_back(b);
-    colors.push_back(y);
+    colors.push_back({255, 0, 0});
+    colors.push_back({0, 255, 0});
+    colors.push_back({0, 0, 255});
+    colors.push_back({255, 255, 0});
 
     for (size_t poly_idx = 0; poly_idx < shapes.size(); ++poly_idx) {
 
@@ -49,7 +47,7 @@ void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector<flo
         auto corner_points_sorted = sortVertices(corner_points);
 
         for (size_t i = 0; i < corner_points_sorted.size(); ++i) {
-            cv::circle(*original_image, corner_points_sorted[i], 5, colors[i], CV_FILLED);
+            CvUtil::drawCross(original_image, corner_points_sorted[i], colors[i], 3, 1);
         }
 
         // warp shape
@@ -64,7 +62,11 @@ void MarkerDetector::findMarkers(const cv::Mat &binarized_image, std::vector<flo
         // validate whether the detected shape is a trackable marker
         int marker_id = validateMarker(marker_map);
         if (marker_id > -1) {
-//            LOGI("Found marker with id: %s", ss.str().c_str());
+
+//            for (size_t i = 0; i < corner_points_sorted.size(); ++i) {
+//                CvUtil::drawCross(original_image, corner_points_sorted[i], colors[i], 3, 1);
+//            }
+
             active_markers->push_back(marker_id);
             active_markers->push_back(-10);
             active_markers->push_back(corner_points_sorted[0].x);

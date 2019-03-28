@@ -9,27 +9,15 @@ using GoogleARCore;
 public class MarkerDetector : MonoBehaviour
 {
     public ARCoreSession arCoreSession;
-    public GameObject debugScreen;
+    public GameObject arCoreCamera;
 
-    public int imageWidth;
-    public int imageHeight;
+    private Camera camera_;
+    private TrackableHitFlags raycastFilter_;
+    private List<Marker> marker_list_ = new List<Marker>();
 
-    private CameraImageBytes current_image_bytes;
-    private CameraIntrinsics camera_intrinsics;
-
-    private List<Marker> marker_list;
+    private Texture2D texture_;
 
 
-    /// <summary>
-    /// Finds the markers in image.
-    /// </summary>
-    /// <param name="width">Width.</param>
-    /// <param name="height">Height.</param>
-    /// <param name="row_stride">Row stride.</param>
-    /// <param name="uv_stride">Uv stride.</param>
-    /// <param name="uv_pixel_stride">Uv pixel stride.</param>
-    /// <param name="pixel_buffer">Pixel buffer.</param>
-    /// <param name="bufferSize">Buffer size.</param>
     [DllImport("native")]
     private static extern void findMarkersInImage(int width, int height, int row_stride, byte[] pixel_buffer);
 
@@ -48,8 +36,11 @@ public class MarkerDetector : MonoBehaviour
 
     IEnumerator Start()
     {
-        //marker_list = new List<Marker>();
+        // create texture 
         CreateTextureAndPassToPlugin();
+
+        // setup raycast filter
+        raycastFilter_ = TrackableHitFlags.PlaneWithinPolygon | TrackableHitFlags.FeaturePointWithSurfaceNormal;
         yield return StartCoroutine("CallPluginAtEndOfFrames");
     }
 
@@ -57,6 +48,7 @@ public class MarkerDetector : MonoBehaviour
     {
         while (true)
         {
+
             // Wait until all frame rendering is done
             yield return new WaitForEndOfFrame();
 
@@ -69,8 +61,22 @@ public class MarkerDetector : MonoBehaviour
                 {
                     if (image.IsAvailable)
                     {
+                        // if there is a new image available 
                         _OnImageAvailable(image.Width, image.Height, image.YRowStride, image.Y);
                         image.Release();
+
+                        // Issue a plugin event with arbitrary integer identifier.
+                        // The plugin can distinguish between different
+                        // things it needs to do based on this ID.
+                        // For our simple plugin, it does not matter which ID we pass here.
+                        GL.IssuePluginEvent(GetRenderEventFunc(), 1);
+
+                        // gather detected markers from native plugin
+                        _GetMarkersFromPlugin();
+
+                        // find world position of detected markers
+                        _FindMarkerWorldPositions();
+
                     }
                     else
                     {
@@ -81,30 +87,8 @@ public class MarkerDetector : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning("The AR Core session seems to be invalid!");
+                Debug.LogWarning("The ARCore session seems to be invalid!");
             }
-
-            // Issue a plugin event with arbitrary integer identifier.
-            // The plugin can distinguish between different
-            // things it needs to do based on this ID.
-            // For our simple plugin, it does not matter which ID we pass here.
-            GL.IssuePluginEvent(GetRenderEventFunc(), 1);
-
-            // gather detected markers from native plugin
-            _GetMarkersFromPlugin();
-
-
-            //// Raycast for each marker location to find the three dimensional references
-            //TrackableHitFlags raycastFilter = TrackableHitFlags.PlaneWithinPolygon |
-            //    TrackableHitFlags.FeaturePointWithSurfaceNormal;
-            //foreach (var marker in marker_list)
-            //{
-            //    var centroid = marker.GetCentroid();
-
-            //    TrackableHit hit;
-            //    Frame.Raycast(centroid.x, centroid.y, raycastFilter, out hit);
-            //    Debug.Log("Latest hit: " + hit);
-            //}
 
         }
     }
@@ -112,17 +96,14 @@ public class MarkerDetector : MonoBehaviour
     private void CreateTextureAndPassToPlugin()
     {
         // Create a texture - FIXME: non-power-of-two (NPOT) is inefficient
-        Texture2D tex = new Texture2D(640, 480, TextureFormat.RGBA32, false);
+        texture_ = new Texture2D(640, 480, TextureFormat.RGBA32, false);
         // Set point filtering just so we can see the pixels clearly
-        tex.filterMode = FilterMode.Point;
+        texture_.filterMode = FilterMode.Point;
         // Call Apply() so it's actually uploaded to the GPU
-        tex.Apply();
-
-        // Set texture onto our material
-        debugScreen.GetComponent<Renderer>().material.mainTexture = tex;
+        texture_.Apply();
 
         // Pass texture pointer to the plugin
-        SetTextureFromUnity(tex.GetNativeTexturePtr(), tex.width, tex.height);
+        SetTextureFromUnity(texture_.GetNativeTexturePtr(), texture_.width, texture_.height);
     }
 
 
@@ -137,11 +118,11 @@ public class MarkerDetector : MonoBehaviour
     private void _OnImageAvailable(int width, int height, int rowStride, System.IntPtr pixel_buffer)
     {
         // Adjust buffer size if necessary.
-        int actual_bugger_size = rowStride * height;
-        byte[] image_buffer = new byte[actual_bugger_size];
+        int actual_buffer_size = rowStride * height;
+        byte[] image_buffer = new byte[actual_buffer_size];
 
         // Move raw data into managed buffer.
-        Marshal.Copy(pixel_buffer, image_buffer, 0, actual_bugger_size);
+        Marshal.Copy(pixel_buffer, image_buffer, 0, actual_buffer_size);
         try
         {
             findMarkersInImage(width, height, rowStride, image_buffer);
@@ -160,13 +141,14 @@ public class MarkerDetector : MonoBehaviour
     private void _GetMarkersFromPlugin()
     {
         // clear local marker list
-        //marker_list.Clear();
+        marker_list_.Clear();
 
         // create local variables & gather values
         int length;
         int marker_stride;
         System.IntPtr marker_array_ptr;
         GetFoundMarkers(out length, out marker_stride, out marker_array_ptr);
+
         byte[] marker_array = new byte[length];
 
         // copy data
@@ -174,8 +156,6 @@ public class MarkerDetector : MonoBehaviour
         Marshal.FreeCoTaskMem(marker_array_ptr);
 
         int num_markers = length / marker_stride;
-        Debug.Log("Number of markers: " + num_markers);
-
         if (length > 0)
         {
             for (int n = 0; n < num_markers; ++n)
@@ -186,10 +166,48 @@ public class MarkerDetector : MonoBehaviour
                 Vector2 tr = new Vector2(marker_array[n + 4], marker_array[n + 5]);
                 Vector2 br = new Vector2(marker_array[n + 6], marker_array[n + 7]);
                 Vector2 bl = new Vector2(marker_array[n + 8], marker_array[n + 9]);
-                //Marker m = new Marker(id, direction, tl, tr, br, bl);
-
-                //this.marker_list.Add(m);
+                Marker m = new Marker(id, direction, tl, tr, br, bl);
+                this.marker_list_.Add(m);
             }
         }
     }
+
+    private void _FindMarkerWorldPositions()
+    {
+        if (marker_list_.Count < 1)
+            return;
+
+
+        // get camera image plane and points
+        BackgroundRenderer br = FindObjectOfType<BackgroundRenderer>();
+        Plane camera_image_plane;
+        Dictionary<string, Vector3> camera_image_plane_corners;
+        if(br.IsDebugPlaneIntialized())
+        {
+            camera_image_plane = br.getCameraImagePlane();
+            camera_image_plane_corners = br.getCameraImagePlaneCorners();
+            camera_image_plane.
+        }
+
+
+        foreach (var marker in marker_list_)
+        {
+            var centroid = marker.GetCentroid();
+
+            TrackableHit hit;
+            Frame.Raycast(centroid.x, centroid.y, raycastFilter_, out hit);
+        }
+    }
+
+
+    private float mapToRange(long value, long in_min, long in_max, long out_min, long out_max)
+    {
+        return (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+    }
+
+    public Texture2D getTexture()
+    {
+        return texture_;
+    }
+
 }
